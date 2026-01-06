@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import xgboost as xgb
 import sys
 import pickle
@@ -103,21 +104,35 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     X, gtin_column = process_and_embed(df)
     print(f"After processing: {len(X):,} rows, {len(X.columns)} features")
     
-    # Load trained model
+    # Load ensemble models (SMOTE + ADASYN)
     models_dir = Path(__file__).parent.parent / "models"
-    model_path = models_dir / "final_anomaly_detector.json"
+    smote_path = models_dir / "bitecheckSMOTE_V1.json"
+    adasyn_path = models_dir / "bitecheckADASYN_V1.json"
     
-    if not model_path.exists():
-        print(f"Error: Model not found at {model_path}")
+    if not smote_path.exists() or not adasyn_path.exists():
+        print(f"Error: Ensemble models not found")
+        print(f"  Looking for: {smote_path}")
+        print(f"  Looking for: {adasyn_path}")
         return 0, None, None
     
-    print(f"Loading model from {model_path}...")
-    model = xgb.XGBClassifier()
-    model.load_model(str(model_path))
+    print(f"Loading ensemble models...")
+    print(f"  - SMOTE model: {smote_path.name}")
+    print(f"  - ADASYN model: {adasyn_path.name}")
     
-    # Generate probabilities
-    print("Generating predictions...")
-    probs = model.predict_proba(X)[:, 1]
+    model_smote = xgb.XGBClassifier()
+    model_smote.load_model(str(smote_path))
+    
+    model_adasyn = xgb.XGBClassifier()
+    model_adasyn.load_model(str(adasyn_path))
+    
+    # Generate probabilities from both models
+    print("Generating predictions from both models...")
+    probs_smote = model_smote.predict_proba(X)[:, 1]
+    probs_adasyn = model_adasyn.predict_proba(X)[:, 1]
+    
+    # Ensemble: Max probability (aggressive recall - flag if either model flags it)
+    probs = np.maximum(probs_smote, probs_adasyn)
+    print(f"Using ensemble: Max probability (aggressive recall)")
     
     # Apply custom threshold (instead of default 0.5)
     preds = (probs >= threshold).astype(int)
