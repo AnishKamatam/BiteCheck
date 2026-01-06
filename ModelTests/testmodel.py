@@ -89,6 +89,17 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df):,} rows")
     
+    # Extract sodium values before processing (for rule-based flagging)
+    sodium_values = None
+    if "sodium" in df.columns:
+        # Clean sodium values same way as in process_and_embed
+        sodium_series = df["sodium"].astype(str).str.rstrip("^").str.strip()
+        sodium_values = pd.to_numeric(sodium_series, errors="coerce")
+        # Keep only rows that will survive processing (have GTIN and ingredients)
+        has_gtin = df["gtin"].notna() if "gtin" in df.columns else pd.Series([True] * len(df))
+        has_ingredients = df["ingredients_text"].notna() & (df["ingredients_text"].astype(str).str.strip() != "") if "ingredients_text" in df.columns else pd.Series([True] * len(df))
+        sodium_values = sodium_values[has_gtin & has_ingredients].reset_index(drop=True)
+    
     X, gtin_column = process_and_embed(df)
     print(f"After processing: {len(X):,} rows, {len(X.columns)} features")
     
@@ -110,6 +121,23 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     
     # Apply custom threshold (instead of default 0.5)
     preds = (probs >= threshold).astype(int)
+    
+    # Apply rule: if sodium > 1500, always flag as anomaly
+    if sodium_values is not None and len(sodium_values) == len(preds):
+        high_sodium_mask = sodium_values > 1500
+        high_sodium_count = high_sodium_mask.sum()
+        if high_sodium_count > 0:
+            preds[high_sodium_mask] = 1
+            print(f"\nRule Applied: {high_sodium_count} items flagged due to sodium > 1500mg")
+    elif "sodium" in X.columns:
+        # Fallback: check sodium from processed X if available
+        sodium_from_X = X["sodium"] if "sodium" in X.columns else None
+        if sodium_from_X is not None:
+            high_sodium_mask = sodium_from_X > 1500
+            high_sodium_count = high_sodium_mask.sum()
+            if high_sodium_count > 0:
+                preds[high_sodium_mask] = 1
+                print(f"\nRule Applied: {high_sodium_count} items flagged due to sodium > 1500mg")
     
     # Calculate metrics
     total_rows = len(preds)
